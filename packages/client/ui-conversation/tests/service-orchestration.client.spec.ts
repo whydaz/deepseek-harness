@@ -85,6 +85,14 @@ describe('ConversationController', () => {
     await b.runtime.dispose()
   })
 
+  it('reads a Session draft without a mounted composer', async () => {
+    const b = await bench()
+    localStorage.setItem('dsh.conversation.s2', JSON.stringify({ draft: { text: 'saved prompt', references: [] } }))
+    expect(b.root.readDraft('s2' as SessionId)).toEqual({ text: 'saved prompt', references: [] })
+    expect(b.root.readDraft('missing' as SessionId)).toEqual({ text: '', references: [] })
+    await b.runtime.dispose()
+  })
+
   it('folds Session business failures into callback rejections', async () => {
     const b = await bench()
     b.prompt.mockResolvedValueOnce({ ok: false, error: new RemoteError('session/agent-busy', 'busy', { reason: 'busy' }) } as never)

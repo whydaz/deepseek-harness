@@ -30,6 +30,8 @@ import type { ComposerBlocks } from './contract/composer-blocks.ts'
 import type {
   DraftAttachmentId, DraftAttachmentSerializationResult, SessionInputResolver, SubmitAttachment, SubmitOutcome,
 } from './contract/input.ts'
+import type { DraftSnapshot } from './contract/draft-editor.ts'
+import { readConversationDraft } from './stores.ts'
 import type { InputSubmitMode } from './contract/composer-submission.ts'
 
 /**
@@ -40,6 +42,12 @@ import type { InputSubmitMode } from './contract/composer-submission.ts'
 export interface IConversation {
   /** The per-session input machine registry (SessionInputResolver face). */
   readonly input: SessionInputResolver
+  /**
+   * Read a Session's persisted unsent draft without mounting its composer.
+   * @param sessionId - Session whose browser-owned draft is required.
+   * @returns the stored semantic draft; empty when the Session has none.
+   */
+  readDraft(sessionId: SessionId): DraftSnapshot
   /**
    * The per-session composer-block registry: how a plugin the composer
    * cannot import makes a session's input inert with its own reason.
@@ -198,6 +206,14 @@ export class ConversationController extends Service implements IConversation {
       this.draftAttachments.clear()
       this.fileUploads.set({})
     }, 'conversation draft attachments')
+  }
+
+  /**
+   * @param sessionId - Session whose browser-owned draft is required.
+   * @returns the persisted unsent draft, or an empty document when none is stored.
+   */
+  readDraft(sessionId: SessionId): DraftSnapshot {
+    return readConversationDraft(sessionId)
   }
 
   /**

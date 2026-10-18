@@ -8,7 +8,7 @@ import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import type { SessionProjectionSnapshot } from '@deepseek-ai/dsh-api-session-controller/client'
 import {
   type ArchivedFilter,
-  deriveFlat, deriveGroups, deriveSearchResults, orderByRecency, owningGroupKey, owningParentFolder,
+  deriveFlat, deriveGroups, deriveSearchResults, draftExcerpt, orderByRecency, owningGroupKey, owningParentFolder,
   pinCurrentBlank, reconcileManualOrder, sessionMemberIds, visibleSessionIds, workspaceLabel, UNGROUPED_KEY,
 } from '../src/client/tree.ts'
 import { createWorkspaceViewStore } from '../src/client/stores.ts'
@@ -299,6 +299,43 @@ describe('deriveGroups', () => {
       [workspace('first', [])], noRows, noAttention, view(),
     )
     expect(strayGroups.map(group => group.key)).toEqual(['first'])
+  })
+
+  it('keeps parked drafts visible as titled provisional rows beside the current blank', () => {
+    const currentBlank = { ...summary('current-blank', 5), blank: true, retainedBy: { mainView: 1 } }
+    const parked = { ...summary('parked', 4), blank: true }
+    const sessions = list(parked, currentBlank)
+    const drafts = new Map([[parked.id, '  Fix the flaky test\nand rerun CI  ']])
+    const groups = deriveGroups(
+      sessions, [workspace('first', ['parked', 'current-blank'])],
+      noRows, noAttention, view(['first']), drafts,
+    )
+    const nodes = groups[0]!.sessions
+    expect(nodes.map(node => node.id)).toEqual([parked.id, currentBlank.id])
+    const parkedNode = nodes.find(node => node.id === parked.id)!
+    expect(parkedNode.draft).toBe(true)
+    expect(parkedNode.blank).toBe(true)
+    expect(parkedNode.title).toBe('Fix the flaky test')
+    const currentNode = nodes.find(node => node.id === currentBlank.id)!
+    expect(currentNode.draft).toBe(false)
+    expect(currentNode.title).toBe('')
+    // The flat list derives the same provisional row.
+    expect(deriveFlat(sessions, sessions.ids, noRows, noAttention, drafts)
+      .find(node => node.id === parked.id)?.draft).toBe(true)
+    // Without the parked draft only the selected blank is visible.
+    const plain = deriveGroups(
+      sessions, [workspace('first', ['parked', 'current-blank'])],
+      noRows, noAttention, view(['first']),
+    )
+    expect(plain[0]!.sessions.map(node => node.id)).toEqual([currentBlank.id])
+  })
+
+  it('bounds a parked draft excerpt to one line', () => {
+    expect(draftExcerpt(undefined)).toBe('')
+    expect(draftExcerpt(' \n\t ')).toBe('')
+    expect(draftExcerpt('short line\nsecond')).toBe('short line')
+    const long = 'x'.repeat(200)
+    expect(draftExcerpt(long)).toBe(`${'x'.repeat(79)}…`)
   })
 
   it('projects the completion reminder into session and search rows (absent = false)', () => {

@@ -54,7 +54,7 @@ import type { ShortcutCatalogEntry } from '@deepseek-ai/dsh-client-shortcuts/cli
 import type { WorkspaceShortcutState } from '../shortcuts.ts'
 import type { StartSessionOptions } from '../navigation.ts'
 import type {} from './toast.ts'
-import type { createWorkspaceViewStore } from '../stores.ts'
+import type { DraftTab, createWorkspaceViewStore } from '../stores.ts'
 
 /**
  * Owner share of the directory-flow holes: the complete conversation between
@@ -228,6 +228,12 @@ export type WorkspaceBrowserInjected = {
     hostInfo: HostObservable<RemoteHostFacts>
     workspaceShortcuts: HostObservable<WorkspaceShortcutState>
     shortcuts: HostObservable<readonly ShortcutCatalogEntry[]>
+    /**
+     * Unsent prompts parked as provisional rows after New Session replaces
+     * their blank Session. The browser derives row visibility, the excerpt
+     * title, and the draft marker from this snapshot.
+     */
+    draftTabs: HostObservable<readonly DraftTab[]>
   }
   /** Open the browser search and focus its input. */
   requestSearch: () => void

@@ -45,7 +45,7 @@ import {
 } from './contract/slots.ts'
 import { createWorkspaceShortcutControls, installWorkspaceShortcuts } from './shortcuts.ts'
 import { UiWorkspaceService } from './navigation.ts'
-import { createWorkspaceViewStore } from './stores.ts'
+import { createWorkspaceViewStore, createDraftTabsStore } from './stores.ts'
 import { WorkspaceBrowser } from './rows/WorkspaceBrowser.tsx'
 import { ArchiveSessionMenuItem, ArchiveSessionRowButton, SessionArchiveConfirmDialog } from './session-actions/ArchiveSession.tsx'
 import { derive } from './session-actions/derived.ts'
@@ -121,9 +121,22 @@ export function apply(ctx: Context): void {
   const rowToast = createSnapshotStore<RowToastState | null>(null)
   let toastSeq = 0
   const notify = (toast: RowToast): void => { rowToast.set({ ...toast, seq: ++toastSeq }) }
+  // Unsent prompts parked as provisional rows when New Session replaces the
+  // blank they belong to; the browser renders them beside the fresh Session.
+  const draftTabs = createDraftTabsStore()
   const uiWorkspace = new UiWorkspaceService(
-    ctx, ctx.remote.directoryPicker, workspaces, sessions, viewInstance.actions, notify,
+    ctx, ctx.remote.directoryPicker, workspaces, sessions, viewInstance.actions, notify, draftTabs,
   )
+  ctx.effect(() => {
+    const reconcile = (): void => { uiWorkspace.reconcileDraftTabs() }
+    const disposeSessions = sessions.list.subscribe(reconcile)
+    const disposeWorkspaces = workspaces.list.subscribe(reconcile)
+    reconcile()
+    return () => {
+      disposeSessions()
+      disposeWorkspaces()
+    }
+  }, 'ui-workspace: draft tabs')
   ctx.slots.provideRoot({
     hooks: { workspaces: workspaces.list },
     keyedHooks: {
@@ -281,7 +294,7 @@ export function apply(ctx: Context): void {
     requestAddWorkspace: shortcutControls.add,
     closeAddWorkspace: shortcutControls.closeAdd,
     setDirectoryBusy: shortcutControls.directoryBusy,
-    hooks: { directoryFlow: browserFlowSource, hostInfo, workspaceShortcuts: shortcutControls.state, shortcuts: ctx.shortcuts.catalog },
+    hooks: { directoryFlow: browserFlowSource, hostInfo, workspaceShortcuts: shortcutControls.state, shortcuts: ctx.shortcuts.catalog, draftTabs },
   })
   const pickerInjected = (): WorkspacePickerInjected => ({
     createWorkspace: input => workspaces.create(input),

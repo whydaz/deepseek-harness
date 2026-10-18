@@ -22,7 +22,9 @@ import type {} from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { DraftInitializationOptions } from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { RowToast } from './contract/slots.ts'
 import { pinOrderAccounts, pinOrderSource } from './pin-order.ts'
+import type { DraftTab, DraftTabState } from './stores.ts'
 import type { WorkspaceViewStoreActions } from './stores.ts'
+import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 
 interface MainSelection {
   readonly sessionId?: SessionId
@@ -168,6 +170,7 @@ class UiWorkspaceService extends Service implements UiWorkspace {
    * @param sessions - pure Session Controller.
    * @param view - the browser's viewing-store write set (one instance shared with its registration).
    * @param notify - show one notice through the Workspace notice channel.
+   * @param draftTabs - unsent prompts parked as provisional sidebar rows.
    */
   constructor(
     ctx: Context,
@@ -176,6 +179,7 @@ class UiWorkspaceService extends Service implements UiWorkspace {
     private readonly sessions: ISessions,
     private readonly view: Pick<WorkspaceViewStoreActions, 'pinSessionOrder'>,
     private readonly notify: (toast: RowToast) => void,
+    private readonly draftTabs: SnapshotStore<DraftTabState>,
   ) {
     super(ctx, 'uiWorkspace')
     ctx.effect(() => {
@@ -318,6 +322,7 @@ class UiWorkspaceService extends Service implements UiWorkspace {
   }
 
   startSession(workspaceId?: WorkspaceId, options?: StartSessionOptions): void {
+    this.rememberCurrentDraft()
     const { agentPreset, ...draft } = options ?? {}
     const draftOptions = options === undefined ? undefined : draft
     const initializeDraft = draftOptions !== undefined
@@ -356,6 +361,50 @@ class UiWorkspaceService extends Service implements UiWorkspace {
     const conversation = this.ctx.get('conversation')
     if (conversation === undefined) this.draftPreparationFailed()
     if (conversation.input.requestDraftInitialization(binding, options) === 'blocked') this.draftPreparationFailed()
+  }
+
+  /**
+   * Keep the current blank Session's unsent prompt as a provisional sidebar
+   * row before New Session replaces the selection, so the prompt stays
+   * reachable while the fresh Session opens beside it.
+   */
+  private rememberCurrentDraft(): void {
+    const current = this.mainReference?.sessionId
+    if (current === undefined) return
+    const summary = this.sessions.list.getSnapshot().byId[current]
+    if (summary === undefined || !summary.blank) return
+    const conversation = this.ctx.get('conversation')
+    if (conversation === undefined) return
+    const text = conversation.readDraft(current).text
+    this.draftTabs.update((tabs) => {
+      const index = tabs.findIndex(tab => tab.sessionId === current)
+      if (text.trim() === '') {
+        if (index !== -1) tabs.splice(index, 1)
+        return
+      }
+      const next: DraftTab = { sessionId: current, text, savedAt: Date.now() }
+      if (index === -1) tabs.push(next)
+      else tabs[index] = next
+    })
+  }
+
+  /**
+   * Drop provisional rows whose Session gained content or was archived. A
+   * Session still awaiting its summary keeps its row, so a list pull that
+   * trails navigation does not discard the prompt.
+   */
+  reconcileDraftTabs(): void {
+    const sessions = this.sessions.list.getSnapshot()
+    if (sessions.phase !== 'ready') return
+    const archived = new Set(this.workspaces.list.getSnapshot().archivedSessionIds)
+    this.draftTabs.update((tabs) => {
+      for (let index = tabs.length - 1; index >= 0; index -= 1) {
+        const tab = tabs[index]
+        if (tab === undefined) continue
+        const summary = sessions.byId[tab.sessionId]
+        if (summary !== undefined && (!summary.blank || archived.has(tab.sessionId))) tabs.splice(index, 1)
+      }
+    })
   }
 
   private draftPreparationFailed(): never {
