@@ -17,11 +17,13 @@ import { SessionId } from '@deepseek-ai/dsh-session/types'
 import { LayoutController } from '@deepseek-ai/dsh-client-ui-layout/client'
 import type { MainPanelId } from '@deepseek-ai/dsh-client-ui-layout/client'
 import { LocaleRuntime } from '@deepseek-ai/dsh-client-locale/client'
-import type { DraftInitializationOptions, SessionInputResolver } from '@deepseek-ai/dsh-client-ui-conversation/client'
+import type {
+  DraftInitializationOptions, IConversation, SessionInputResolver,
+} from '@deepseek-ai/dsh-client-ui-conversation/client'
 import type { RowToast } from '../src/client/contract/slots.ts'
 import { DirectoryBrowseError, UiWorkspaceService } from '../src/client/navigation.ts'
 import { en, zh } from '../src/client/locales.ts'
-import { createWorkspaceViewStore, FLAT_SESSION_ORDER_KEY } from '../src/client/stores.ts'
+import { createDraftTabsStore, createWorkspaceViewStore, FLAT_SESSION_ORDER_KEY } from '../src/client/stores.ts'
 import { UNGROUPED_KEY } from '../src/client/tree.ts'
 
 const sid = (id: string): SessionId => SessionId(id)
@@ -286,7 +288,8 @@ function bench(options: BenchOptions = {}) {
   ctx.effect(() => locale.register('workspace', { en, zh }))
   ctx.provide('locale', locale)
   const requestDraftInitialization = vi.fn<SessionInputResolver['requestDraftInitialization']>(() => 'applied')
-  if (options.conversation !== false) ctx.provide('conversation', { input: { requestDraftInitialization } })
+  const readDraft = vi.fn<IConversation['readDraft']>(() => ({ text: '', references: [] }))
+  if (options.conversation !== false) ctx.provide('conversation', { input: { requestDraftInitialization }, readDraft })
   const layout = new LayoutController({
     selectPanel: vi.fn(), retainMainPanels: vi.fn(),
     setSidebar: vi.fn(), toggleSidebar: vi.fn(), setViewportWidth: vi.fn(),
@@ -301,6 +304,7 @@ function bench(options: BenchOptions = {}) {
   options.configureWorkspaces?.(workspaces)
   options.configureSessions?.(sessions)
   const view = createWorkspaceViewStore().create()
+  const draftTabs = createDraftTabsStore()
   const notify = vi.fn<(toast: RowToast) => void>()
   const uiWorkspace = new UiWorkspaceService(
     ctx,
@@ -309,8 +313,12 @@ function bench(options: BenchOptions = {}) {
     sessions,
     view.actions,
     notify,
+    draftTabs,
   )
-  return { ctx, directoryPicker, sessions, uiWorkspace, workspaces, layout, selectPanel, view, notify, requestDraftInitialization }
+  return {
+    ctx, directoryPicker, sessions, uiWorkspace, workspaces, layout, selectPanel, view, notify,
+    requestDraftInitialization, readDraft, draftTabs,
+  }
 }
 
 function lastOpening(open: MockInstance<UiWorkspaceService['openWorkspace']>): Promise<void> {
@@ -692,6 +700,64 @@ describe('UiWorkspaceService', () => {
       expect(b.sessions.create).toHaveBeenCalledExactlyOnceWith({ workspaceId: wid('a') })
     })
     await vi.waitFor(() => { expect(b.sessions.retain).toHaveBeenCalledWith(sid('created-a'), expect.anything()) })
+  })
+
+  it('parks the current blank draft as a provisional row before opening a fresh Session', async () => {
+    const b = bench({
+      sessions: sessionState([summary('blank', { blank: true, cwd: '/w/a' })]),
+      workspaces: workspaceState([workspace('a', [sid('blank')])]),
+    })
+    b.uiWorkspace.openSession(sid('blank'))
+    b.readDraft.mockReturnValue({ text: 'unsent prompt\nsecond line', references: [] })
+    b.uiWorkspace.startSession(wid('a'))
+    expect(b.readDraft).toHaveBeenCalledWith(sid('blank'))
+    expect(b.draftTabs.getSnapshot()).toEqual([
+      { sessionId: sid('blank'), text: 'unsent prompt\nsecond line', savedAt: expect.any(Number) },
+    ])
+    // The parked row does not replace the explicit New Session creation.
+    await vi.waitFor(() => {
+      expect(b.sessions.create).toHaveBeenCalledWith({ workspaceId: wid('a') })
+    })
+  })
+
+  it('parks nothing for an empty draft or a Session with history', () => {
+    const empty = bench({
+      sessions: sessionState([summary('blank', { blank: true, cwd: '/w/a' })]),
+      workspaces: workspaceState([workspace('a', [sid('blank')])]),
+    })
+    empty.uiWorkspace.openSession(sid('blank'))
+    empty.uiWorkspace.startSession(wid('a'))
+    expect(empty.draftTabs.getSnapshot()).toEqual([])
+
+    const history = bench({
+      sessions: sessionState([summary('known', { cwd: '/w/a' })]),
+      workspaces: workspaceState([workspace('a', [sid('known')])]),
+    })
+    history.uiWorkspace.openSession(sid('known'))
+    history.readDraft.mockReturnValue({ text: 'still editing history', references: [] })
+    history.uiWorkspace.startSession(wid('a'))
+    expect(history.draftTabs.getSnapshot()).toEqual([])
+  })
+
+  it('drops a parked row once its Session gains content or is archived', () => {
+    const b = bench({
+      sessions: sessionState([summary('blank', { blank: true, cwd: '/w/a' })]),
+      workspaces: workspaceState([workspace('a', [sid('blank')])]),
+    })
+    b.uiWorkspace.openSession(sid('blank'))
+    b.readDraft.mockReturnValue({ text: 'parked', references: [] })
+    b.uiWorkspace.startSession(wid('a'))
+    expect(b.draftTabs.getSnapshot()).toHaveLength(1)
+    b.sessions.list.set(sessionState([summary('blank', { blank: false, cwd: '/w/a' })]))
+    b.uiWorkspace.reconcileDraftTabs()
+    expect(b.draftTabs.getSnapshot()).toEqual([])
+
+    // A summary that has not landed yet keeps the row, so a trailing list pull
+    // cannot discard a prompt.
+    b.draftTabs.set([{ sessionId: sid('pending'), text: 'parked', savedAt: 1 }])
+    b.sessions.list.set(sessionState([], 'ready'))
+    b.uiWorkspace.reconcileDraftTabs()
+    expect(b.draftTabs.getSnapshot()).toEqual([{ sessionId: sid('pending'), text: 'parked', savedAt: 1 }])
   })
 
   it('reports a refused explicit Session creation through the Workspace notice', async () => {

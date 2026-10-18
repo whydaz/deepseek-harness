@@ -5,13 +5,41 @@
  * register() receives the factory and the browser derives its PropsStore
  * share from the return type.
  */
-import { defineStore, type EngineStoreHandle } from '@deepseek-ai/dsh-client-store'
+import { createSnapshotStore, defineStore, type EngineStoreHandle, type SnapshotStore } from '@deepseek-ai/dsh-client-store'
 import type { SessionListState } from '@deepseek-ai/dsh-api-session-controller/client'
 import type { SessionId } from '@deepseek-ai/dsh-session/types'
 import { reconcileManualOrder, type ArchivedFilter, type SessionRowState } from './tree.ts'
 
 /** Browser-local order account for the hierarchy-free flat Session list. */
 export const FLAT_SESSION_ORDER_KEY = '__flat_session_order__'
+
+/**
+ * One unsent prompt parked as a provisional sidebar row when its Session
+ * stops being the current blank. Opening the row restores the draft from the
+ * conversation store; the tab itself only carries the identity and the title
+ * excerpt the sidebar renders.
+ */
+export interface DraftTab {
+  /** Session that still owns the browser-persisted draft. */
+  readonly sessionId: SessionId
+  /** Full semantic draft text captured when the row was parked. */
+  readonly text: string
+  /** Epoch ms of the capture, for stable ordering of parked rows. */
+  readonly savedAt: number
+}
+
+/** Persisted draft-tab list; provisional rows never enter the Host session list. */
+export type DraftTabState = DraftTab[]
+
+/**
+ * Create the draft-tab store that keeps unsent prompts reachable after New
+ * Session. The browser derives row titles from it and the workspace service
+ * writes it on navigation.
+ * @returns the persisted snapshot store (one instance per plugin lifetime).
+ */
+export function createDraftTabsStore(): SnapshotStore<DraftTabState> {
+  return createSnapshotStore<DraftTabState>([], { persist: { name: 'dsh.workspace.draftTabs' } })
+}
 
 /** Session-list grouping mode: sibling Workspace sections, a Workspace tree, or one flat list. */
 export type SessionGroupBy = 'workspace' | 'workspace-tree' | 'flat'

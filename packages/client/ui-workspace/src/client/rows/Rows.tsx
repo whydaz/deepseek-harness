@@ -44,8 +44,12 @@ type RowRenderSlots = PropsRenderSlots<
   | 'sidebar.session.row.hover'
 >['renderSlot']
 
-/** Row display title: blank rows show the localized New Session label. */
+/**
+ * Row display title: a parked draft shows its prompt excerpt, a blank row
+ * shows the localized New Session label, and history falls back to Untitled.
+ */
 function displayTitle(node: SessionNode, t: RowTranslate): string {
+  if (node.draft) return node.title
   return node.blank ? t('session.new') : (node.title || t('session.untitled'))
 }
 
@@ -643,6 +647,10 @@ export function SessionNodeItem({
       >
         {title}
       </span>
+      {/* A parked draft is provisional like the current blank: it shows the
+          prompt excerpt and a draft marker instead of a timestamp or row
+          verbs, until its first prompt turns it into ordinary history. */}
+      {row.draft && <span className={css.draftBadge}>{t('session.draft')}</span>}
       {/* A blank New Session row is a provisional placeholder: nothing has
           happened in it yet, so a "now" timestamp and the row verbs
           (rename/fork/archive) would all act on content that does not

@@ -47,6 +47,8 @@ export interface SessionNode {
   title: string
   /** The provisional blank session (renderer shows the localized New Session title). */
   blank: boolean
+  /** An unsent prompt parked as a provisional row after New Session (renderer shows the draft marker). */
+  draft?: boolean
   /** A Session-scoped UI consumer is awaiting this user. */
   pendingInteraction?: SessionPendingInteractionStatus
   running: boolean
@@ -229,20 +231,36 @@ export function pinCurrentBlank(
  */
 export type ArchivedFilter = 'default' | 'show' | 'only'
 
+/** No parked drafts: the derivation used by surfaces that own no draft rows. */
+const NO_DRAFT_TABS: ReadonlyMap<SessionId, string> = new Map()
+
 /**
- * Ordinary sessions are visible; among blank sessions, only the current one
- * is visible. Subagent children use their parent header catalog; archived
- * sessions follow the archived filter, while their accounting slots remain
- * either way so unarchiving restores position.
+ * One-line title for a parked draft: the first non-empty line, bounded so a
+ * long paste does not turn the provisional row into a paragraph.
+ * @param text - full semantic draft text.
+ * @returns the excerpt, or an empty string when the draft has no text.
+ */
+export function draftExcerpt(text: string | undefined): string {
+  if (text === undefined) return ''
+  const line = text.split(/\r?\n/u).map(part => part.trim()).find(part => part !== '') ?? ''
+  return line.length > 80 ? `${line.slice(0, 79)}…` : line
+}
+
+/**
+ * Ordinary sessions are visible; among blank sessions, the current one and
+ * parked drafts stay visible. Subagent children use their parent header
+ * catalog; archived sessions follow the archived filter, while their
+ * accounting slots remain either way so unarchiving restores position.
  */
 function sessionVisible(
   session: SessionSummary,
   current: SessionId | undefined,
   archived: ReadonlySet<SessionId>,
   archivedFilter: ArchivedFilter,
+  draftTabs: ReadonlyMap<SessionId, string>,
 ): boolean {
   if (session.origin === 'subagent') return false
-  if (session.blank && session.id !== current) return false
+  if (session.blank && session.id !== current && !draftTabs.has(session.id)) return false
   switch (archivedFilter) {
     case 'default':
       return !archived.has(session.id)
@@ -288,12 +306,17 @@ function sectionMembers(
 
 /**
  * A blank session is the selected Workspace's provisional New Session row;
- * its canonical title never enters search (blank rows are query-excluded)
- * and the renderer localizes its display label. Unnamed history also yields an
- * empty title for localization and does not match a directory-name title search.
+ * a parked draft row titles itself from the saved prompt instead. Blank rows
+ * never enter search (query-excluded), and unnamed history yields an empty
+ * title for localization.
  */
-function sessionTitle(session: SessionSummary): string {
-  return session.blank ? '' : (session.title?.trim() ?? '')
+function sessionTitle(
+  session: SessionSummary,
+  current: SessionId | undefined,
+  draftTabs: ReadonlyMap<SessionId, string>,
+): string {
+  if (session.blank) return session.id === current ? '' : draftExcerpt(draftTabs.get(session.id))
+  return session.title?.trim() ?? ''
 }
 
 /** Build one group without projecting session lineage into presentation. */
@@ -337,6 +360,7 @@ function groupByWorkspace(
   archived: ReadonlySet<SessionId>,
   archivedFilter: ArchivedFilter,
   ungroupedOrder: readonly string[] | undefined,
+  draftTabs: ReadonlyMap<SessionId, string>,
 ): Group[] {
   const current = mainSessionId(list)
   const groups: Group[] = []
@@ -347,7 +371,7 @@ function groupByWorkspace(
       const summary = list.byId[id]
       if (summary === undefined) continue // account may lead the list pull; the row appears when the summary lands
       accounted.add(id)
-      if (!sessionVisible(summary, current, archived, archivedFilter)) continue
+      if (!sessionVisible(summary, current, archived, archivedFilter, draftTabs)) continue
       members.push(summary)
     }
     // The archived-only view lists archives, not the Workspace inventory, so
@@ -361,7 +385,7 @@ function groupByWorkspace(
   const stray = list.ids
     .map(id => list.byId[id])
     .filter((s): s is SessionSummary =>
-      s !== undefined && !accounted.has(s.id) && sessionVisible(s, current, archived, archivedFilter))
+      s !== undefined && !accounted.has(s.id) && sessionVisible(s, current, archived, archivedFilter, draftTabs))
   if (stray.length > 0) {
     groups.push(buildGroup(
       UNGROUPED_KEY,
@@ -400,13 +424,16 @@ function sessionNode(
   statuses: SessionStatuses,
   pinned: ReadonlySet<SessionId>,
   archived: ReadonlySet<SessionId>,
+  current: SessionId | undefined,
+  draftTabs: ReadonlyMap<SessionId, string>,
 ): SessionNode {
   const status = statuses.get(s.id)
   const pendingInteraction = visiblePendingKind(status?.pendingInteraction?.kind)
   return {
     id: s.id,
-    title: sessionTitle(s),
+    title: sessionTitle(s, current, draftTabs),
     blank: s.blank,
+    draft: s.blank && s.id !== current && draftTabs.has(s.id),
     running: status?.running ?? s.running,
     runningSubagentCount: runningChildCount(list, s.id, statuses),
     completed: status?.completionUnread === true,
@@ -431,6 +458,7 @@ function sessionNode(
  * @param rowState - registry-global pin and archive sets plus the archived filter.
  * @param statuses - unified UI status by Session.
  * @param view - local expansion arrays.
+ * @param draftTabs - parked unsent prompts by Session, shown as provisional rows.
  * @returns group sections in render order.
  */
 export function deriveGroups(
@@ -439,6 +467,7 @@ export function deriveGroups(
   rowState: SessionRowState,
   statuses: SessionStatuses,
   view: TreeView,
+  draftTabs: ReadonlyMap<SessionId, string> = NO_DRAFT_TABS,
 ): GroupNode[] {
   const archived = new Set(rowState.archivedSessionIds)
   const pinned = new Set(rowState.pinnedSessionIds)
@@ -448,7 +477,7 @@ export function deriveGroups(
     ? undefined
     : owningGroupKey(workspaces, current)
   const groups: GroupNode[] = []
-  for (const g of groupByWorkspace(list, workspaces, archived, rowState.archivedFilter, view.ungroupedOrder)) {
+  for (const g of groupByWorkspace(list, workspaces, archived, rowState.archivedFilter, view.ungroupedOrder, draftTabs)) {
     const expanded = expandedGroups.has(g.key)
     groups.push({
       key: g.key,
@@ -461,7 +490,7 @@ export function deriveGroups(
       containsCurrent: g.key === currentGroup,
       sessions: expanded
         ? sectionMembers(g.sessions, pinned, archived)
-          .map(session => sessionNode(session, list, statuses, pinned, archived))
+          .map(session => sessionNode(session, list, statuses, pinned, archived, current, draftTabs))
         : [],
     })
   }
@@ -488,12 +517,13 @@ export function visibleSessionIds(
   list: SessionListState,
   archivedSessionIds: readonly SessionId[],
   archivedFilter: ArchivedFilter,
+  draftTabs: ReadonlyMap<SessionId, string> = NO_DRAFT_TABS,
 ): SessionId[] {
   const archived = new Set(archivedSessionIds)
   const current = mainSessionId(list)
   return list.ids.filter((id) => {
     const s = list.byId[id]
-    return s !== undefined && sessionVisible(s, current, archived, archivedFilter)
+    return s !== undefined && sessionVisible(s, current, archived, archivedFilter, draftTabs)
   })
 }
 
@@ -504,6 +534,7 @@ export function visibleSessionIds(
  * @param sessionIds - complete account members in the selected order, including hidden archives.
  * @param rowState - registry-global pin and archive sets plus the archived filter.
  * @param statuses - unified UI status by Session.
+ * @param draftTabs - parked unsent prompts by Session, shown as provisional rows.
  * @returns flat rows in sectioned order with current status indicators.
  */
 export function deriveFlat(
@@ -511,18 +542,19 @@ export function deriveFlat(
   sessionIds: readonly SessionId[],
   rowState: SessionRowState,
   statuses: SessionStatuses,
+  draftTabs: ReadonlyMap<SessionId, string> = NO_DRAFT_TABS,
 ): SessionNode[] {
   const archived = new Set(rowState.archivedSessionIds)
   const pinned = new Set(rowState.pinnedSessionIds)
   const current = mainSessionId(list)
   const members = sessionIds.flatMap((id) => {
     const session = list.byId[id]
-    return session !== undefined && sessionVisible(session, current, archived, rowState.archivedFilter)
+    return session !== undefined && sessionVisible(session, current, archived, rowState.archivedFilter, draftTabs)
       ? [session]
       : []
   })
   return sectionMembers(members, pinned, archived)
-    .map(session => sessionNode(session, list, statuses, pinned, archived))
+    .map(session => sessionNode(session, list, statuses, pinned, archived, current, draftTabs))
 }
 
 /**
@@ -572,9 +604,9 @@ export function deriveSearchResults(
     const summary = list.byId[id]
     // Blank placeholders never match a query (their canonical title displays
     // localized, so matching it would tie search to one language).
-    if (summary === undefined || summary.blank || !sessionVisible(summary, current, archived, archivedFilter)) continue
+    if (summary === undefined || summary.blank || !sessionVisible(summary, current, archived, archivedFilter, NO_DRAFT_TABS)) continue
     if (
-      sessionTitle(summary).toLowerCase().includes(q)
+      sessionTitle(summary, current, NO_DRAFT_TABS).toLowerCase().includes(q)
       || labelOf(summary).toLowerCase().includes(q)
     ) {
       local.push(summary)
@@ -594,7 +626,7 @@ export function deriveSearchResults(
   for (const summary of orderedLocal) include(summary)
   for (const item of content.items) {
     const summary = list.byId[item.sessionId]
-    if (summary !== undefined && !summary.blank && sessionVisible(summary, current, archived, archivedFilter)) include(summary)
+    if (summary !== undefined && !summary.blank && sessionVisible(summary, current, archived, archivedFilter, NO_DRAFT_TABS)) include(summary)
   }
 
   return {
@@ -604,7 +636,7 @@ export function deriveSearchResults(
       const pendingInteraction = visiblePendingKind(status?.pendingInteraction?.kind)
       return {
         id: summary.id,
-        title: sessionTitle(summary),
+        title: sessionTitle(summary, current, NO_DRAFT_TABS),
         workspace: labelOf(summary),
         running: status?.running ?? summary.running,
         runningSubagentCount: runningChildCount(list, summary.id, statuses),

@@ -137,6 +137,7 @@ function mount(overrides: Partial<WorkspaceBrowserProps> = {}) {
     createWorkspace: vi.fn(async () => workspace('created', [])),
     useDirectoryFlow: bindSnapshotSelector({ getSnapshot: () => true, subscribe: () => () => {} }),
     useHostInfo: selector => selector({ home: undefined, isLoopback: true }),
+    useDraftTabs: hook([]),
     renderSlot: renderDirectoryFlowOnly,
     t,
     ...overrides,
@@ -1347,6 +1348,19 @@ describe('WorkspaceBrowser', () => {
     expect(screen.queryByText('新会话')).toBeNull()
     fireEvent.change(screen.getByPlaceholderText('搜索会话名称'), { target: { value: '新会话' } })
     expect(screen.queryByText('新会话')).toBeNull()
+  })
+
+  it('renders a parked draft as a titled provisional row with a draft marker', () => {
+    const currentBlank = summary('current-blank', 9, { blank: true })
+    const parked = summary('parked', 8, { blank: true })
+    mount({
+      useSessions: hook(sessionState([currentBlank, parked], { main: currentBlank.id })),
+      useWorkspaces: hook(workspaceState([workspace('alpha', ['current-blank', 'parked'])])),
+      useDraftTabs: hook([{ sessionId: parked.id, text: 'Port the parser\nsecond line', savedAt: 1 }]),
+    })
+    expect(screen.getByText('Port the parser')).toBeTruthy()
+    expect(screen.getByText('草稿')).toBeTruthy()
+    expect(screen.getByText('新会话')).toBeTruthy()
   })
 
   it.each(['workspace', 'flat', 'ungrouped'] as const)('keeps a new blank first across %s mode switches and enables drag after the first prompt', (mode) => {

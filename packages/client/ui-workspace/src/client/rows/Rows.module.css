@@ -226,6 +226,18 @@
   color: var(--dsw-alias-label-tertiary);
 }
 
+/* Parked-draft marker: a quiet pill in the trailing cell a blank row would
+   otherwise leave empty, so the provisional row reads as unsent input. */
+.draftBadge {
+  flex: none;
+  padding: 0 6px;
+  border-radius: var(--dsw-radius-sm);
+  font-size: 10px;
+  line-height: 16px;
+  color: var(--dsw-alias-label-secondary);
+  background: var(--dsw-alias-interactive-bg-hover);
+}
+
 .pinIndicator {
   display: inline-flex;
   flex: none;

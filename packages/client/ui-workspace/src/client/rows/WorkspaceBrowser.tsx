@@ -283,6 +283,8 @@ type SessionTreeProps = Pick<
   setSessionOrder: (accountKey: string, order: readonly string[]) => void
   /** Registry-global pin and archive sets plus the archived-visibility choice. */
   rowState: SessionRowState
+  /** Parked unsent prompts by Session, rendered as provisional rows. */
+  draftTabs: ReadonlyMap<SessionId, string>
   /** Switch the archived filter back to the default hide-archived view. */
   onLeaveArchivedOnly: () => void
   /** Open the browser-owned rename dialog for a real Workspace group. */
@@ -323,7 +325,7 @@ function SessionTree({
   insertWorkspaceBefore,
   nestWorkspaces, groupExpansion, setGroupExpanded,
   setSessionOrder, home, t,
-  revealSessionId, onSessionRevealed, shortcuts,
+  revealSessionId, onSessionRevealed, shortcuts, draftTabs,
 }: SessionTreeProps) {
   const panelActive = usePanelInfo(info => info.activePanelId !== null)
   const statuses = useSessionStatus(s => s)
@@ -376,8 +378,8 @@ function SessionTree({
     () => deriveGroups(list, workspaces, rowState, statuses, {
       expandedGroups,
       ungroupedOrder: ungroupedSessionIds,
-    }),
-    [list, workspaces, rowState, statuses, expandedGroups, ungroupedSessionIds],
+    }, draftTabs),
+    [list, workspaces, rowState, statuses, expandedGroups, ungroupedSessionIds, draftTabs],
   )
   useEffect(() => {
     for (let key = revealGroup; key !== undefined; key = parents.get(key)) {
@@ -689,7 +691,7 @@ function SessionTree({
 function FlatList({
   list, sessionIds, rowState, onLeaveArchivedOnly, useSessionStatus, open, onSessionRenameRequest,
   usePanelInfo, setSessionOrder, workspaceReady, animationResetKey,
-  revealSessionId, onSessionRevealed, renderSlot, t,
+  revealSessionId, onSessionRevealed, renderSlot, t, draftTabs,
 }: Pick<
   SessionTreeProps,
   | 'useSessionStatus'
@@ -704,6 +706,7 @@ function FlatList({
   | 'onSessionRevealed'
   | 'rowState'
   | 'onLeaveArchivedOnly'
+  | 'draftTabs'
   | 't'
 > & {
   list: SessionListState
@@ -712,8 +715,8 @@ function FlatList({
   const panelActive = usePanelInfo(info => info.activePanelId !== null)
   const statuses = useSessionStatus(s => s)
   const rows = useMemo(
-    () => deriveFlat(list, sessionIds, rowState, statuses),
-    [list, sessionIds, rowState, statuses],
+    () => deriveFlat(list, sessionIds, rowState, statuses, draftTabs),
+    [list, sessionIds, rowState, statuses, draftTabs],
   )
   const [drag, setDrag] = useState<DragState | null>(null)
   const dropCommitted = useRef(false)
@@ -917,6 +920,7 @@ export function WorkspaceBrowser({
   useHostInfo,
   useShortcuts,
   useWorkspaceShortcuts,
+  useDraftTabs,
   requestSearch,
   requestAddWorkspace,
   closeAddWorkspace,
@@ -929,6 +933,13 @@ export function WorkspaceBrowser({
   const searchShortcut = shortcuts.find(row => row.id === 'session.search')
   const addShortcut = shortcuts.find(row => row.id === 'workspace.add')
   const shortcutState = useWorkspaceShortcuts(state => state)
+  // Parked drafts title provisional rows and keep blank Sessions visible
+  // after New Session replaces them; the map is the tree derivation's lookup.
+  const draftTabRows = useDraftTabs(tabs => tabs)
+  const draftTabs = useMemo(
+    () => new Map(draftTabRows.map(tab => [tab.sessionId, tab.text])),
+    [draftTabRows],
+  )
   // Ordering remains live while the rail or search replaces the list body.
   const list = useSessions(state => state)
   const storedWorkspaces = useWorkspaces(state => state.items)
@@ -1424,6 +1435,7 @@ export function WorkspaceBrowser({
                 list={list}
                 sessionIds={orderedFlatSessionIds}
                 rowState={rowState}
+                draftTabs={draftTabs}
                 onLeaveArchivedOnly={leaveArchivedOnly}
                 workspaceReady={workspaceReady}
                 animationResetKey={`${groupBy}/${orderBy}/${archivedFilter}`}
@@ -1454,6 +1466,7 @@ export function WorkspaceBrowser({
                 setGroupExpanded={actions.setGroupExpanded}
                 setSessionOrder={saveSessionOrder}
                 rowState={rowState}
+                draftTabs={draftTabs}
                 onLeaveArchivedOnly={leaveArchivedOnly}
                 startSession={startSession}
                 open={guardedOpen}
